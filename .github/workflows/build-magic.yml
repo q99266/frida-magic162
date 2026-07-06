@@ -71,6 +71,7 @@ jobs:
             build/frida-android-arm64/bin/frida-server \
             build/frida-server-processed
           chmod +x build/frida-server-processed
+          python tools/verify-embedded-agents.py build/frida-server-processed
           build/frida-server-processed --version || true
 
       - name: Upload server artifact

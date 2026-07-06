@@ -80,8 +80,10 @@ DEBUG_PATH_REPLACEMENTS = [
 
 DEX_MAGIC = b"dex\n035"
 ELF_MAGIC = b"\x7fELF"
+ELFCLASS32 = 1
 ELFCLASS64 = 2
 PT_LOAD = 1
+MIN_AGENT_BLOB_SIZE = 1_000_000
 AGENT_MAIN_NAMES = (b"app_agent_main", b"frida_agent_main")
 DEFAULT_HELPER_DEX = (
     Path(__file__).resolve().parent
@@ -474,6 +476,39 @@ def _elf64_span(content: bytes, start: int) -> tuple[int, int] | None:
     return start, end
 
 
+def _elf32_span(content: bytes, start: int) -> tuple[int, int] | None:
+    if start + 52 > len(content) or content[start : start + 4] != ELF_MAGIC:
+        return None
+    if content[start + 4] != ELFCLASS32:
+        return None
+
+    e_phoff = struct.unpack("<I", content[start + 28 : start + 32])[0]
+    e_phnum = struct.unpack("<H", content[start + 44 : start + 46])[0]
+    e_phentsize = struct.unpack("<H", content[start + 42 : start + 44])[0]
+    if e_phoff == 0 or e_phnum == 0:
+        return None
+
+    max_off = 0
+    for p in range(min(e_phnum, 64)):
+        ph = start + e_phoff + p * e_phentsize
+        if ph + 32 > len(content):
+            break
+        p_type = struct.unpack("<I", content[ph : ph + 4])[0]
+        p_offset = struct.unpack("<I", content[ph + 4 : ph + 8])[0]
+        p_filesz = struct.unpack("<I", content[ph + 16 : ph + 20])[0]
+        if p_type == PT_LOAD:
+            max_off = max(max_off, p_offset + p_filesz)
+
+    if max_off < 4096:
+        return None
+
+    end = start + max_off
+    if end > len(content):
+        return None
+
+    return start, end
+
+
 def find_embedded_elf_spans(content: bytes) -> list[tuple[int, int]]:
     spans: list[tuple[int, int]] = []
     idx = 0
@@ -481,18 +516,30 @@ def find_embedded_elf_spans(content: bytes) -> list[tuple[int, int]]:
         i = content.find(ELF_MAGIC, idx)
         if i < 0:
             break
-        span = _elf64_span(content, i)
-        if span is not None:
-            spans.append(span)
+        for span_fn in (_elf64_span, _elf32_span):
+            span = span_fn(content, i)
+            if span is not None:
+                spans.append(span)
+                break
         idx = i + 4
     return merge_skip_ranges(spans)
+
+
+def _looks_like_agent_blob(blob: bytes) -> bool:
+    if len(blob) < MIN_AGENT_BLOB_SIZE:
+        return False
+    if any(name in blob for name in AGENT_MAIN_NAMES):
+        return True
+    if b"JNI_OnLoad" not in blob:
+        return False
+    return b"gum" in blob or b"GumJS" in blob or b"frida-" in blob or b"app-" in blob
 
 
 def find_agent_elf_spans(content: bytes) -> list[tuple[int, int]]:
     agent_spans: list[tuple[int, int]] = []
     for start, end in find_embedded_elf_spans(content):
         blob = content[start:end]
-        if any(name in blob for name in AGENT_MAIN_NAMES):
+        if _looks_like_agent_blob(blob):
             agent_spans.append((start, end))
     return agent_spans
 
@@ -710,6 +757,12 @@ def _rename_agent_entrypoint_with_lief(blob: bytearray) -> bool:
             return False
 
         renamed = False
+        for symbol in list(agent_binary.dynamic_symbols) + list(
+            agent_binary.exported_symbols
+        ):
+            if symbol.name == "main":
+                return True
+
         for old_name in AGENT_MAIN_NAMES:
             old_str = old_name.decode("ascii")
             for symbol in agent_binary.dynamic_symbols:
@@ -751,10 +804,12 @@ def _rename_agent_entrypoint_with_lief(blob: bytearray) -> bool:
 
 def repair_embedded_agent_main(binary, dry_run: bool) -> int:
     """
-    Rename app_agent_main -> main inside embedded app-agent ELF blobs.
+    Rename app_agent_main/frida_agent_main -> main inside embedded agent ELF blobs.
 
-    Uses lief so .gnu.hash stays consistent with dlsym('main'). Scrubs in
-    steps 2d/2e skip embedded ELF spans; legacy blobs get scrub reverts here.
+  Both 32-bit and 64-bit embedded agents are repaired. The patched server
+  injects with entrypoint "main" (see tools/apply-magic-patches.py). Uses lief
+  so .gnu.hash stays consistent with dlsym('main'). Scrubs in steps 2d/2e skip
+  embedded ELF spans; legacy blobs get scrub reverts here.
     """
     repairs = 0
 

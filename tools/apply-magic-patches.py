@@ -22,6 +22,15 @@ APP_LISTEN_BLOCK = """
 
 """
 
+ENTRYPOINT_FILES = [
+    CORE / "src/linux/linux-host-session.vala",
+    CORE / "src/darwin/darwin-host-session.vala",
+    CORE / "src/windows/windows-host-session.vala",
+    CORE / "src/qnx/qnx-host-session.vala",
+    CORE / "src/freebsd/freebsd-host-session.vala",
+    CORE / "src/agent-container.vala",
+]
+
 
 def patch_re_frida(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
@@ -48,12 +57,27 @@ def patch_server() -> None:
     print(f"patched: {path}")
 
 
+def patch_agent_entrypoint(path: Path) -> None:
+    text = path.read_text(encoding="utf-8")
+    if '"main"' in text and '"frida_agent_main"' not in text:
+        print(f"skip (entrypoint already patched): {path}")
+        return
+    if '"frida_agent_main"' not in text:
+        print(f"skip (no frida_agent_main): {path}")
+        return
+    path.write_text(text.replace('"frida_agent_main"', '"main"'), encoding="utf-8")
+    print(f"patched entrypoint: {path}")
+
+
 def main() -> None:
     if not (CORE / "lib/base").is_dir():
         sys.exit("frida-core submodule missing — run git submodule update --init --recursive")
     for f in FILES_RE_FRIDA:
         if f.is_file():
             patch_re_frida(f)
+    for f in ENTRYPOINT_FILES:
+        if f.is_file():
+            patch_agent_entrypoint(f)
     patch_server()
     print("Magic patches applied.")
 
