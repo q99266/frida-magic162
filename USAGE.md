@@ -2,22 +2,19 @@
 
 基于 [frida-magic1798](https://github.com/q99266/frida-magic1798) 方案，将 Frida **16.2.1** 的 D-Bus 命名空间改为 `re.nginx`，脚本 RPC 改为 `nginx:rpc`，并对 server 二进制做反检测后处理。
 
-## 目录结构
+魔改仓库为 **overlay** 结构（非完整 Frida fork）：CI 自动 clone 官方 Frida 16.2.1 后打补丁构建。
 
 ```
 D:\cursorwork\frida-magic162\
-├── build/                          # CI 下载产物解压目录（本地）
-│   ├── frida-server-processed      # Android arm64 server
-│   └── frida-client-windows-amd64/ # 魔改 Python 客户端
-├── post_process.py                 # server 二进制后处理
-├── tools/
-│   ├── patch-frida-client.py       # 魔改 pip 版 frida 客户端
-│   ├── deploy-server.ps1           # 推送 server 到手机
-│   ├── setup-forward.ps1           # adb forward
-│   ├── frida-launcher-v2.sh        # 设备端 stealth 启动器
-│   └── run-frida-patched.ps1       # 使用魔改客户端运行 frida CLI
+├── build/                          # CI 产物下载目录
+├── post_process.py
+├── tools/frida-patched/            # 魔改客户端（frida/ 与 _frida.pyd 同级）
+│   ├── frida/
+│   └── _frida.pyd
 └── USAGE.md
 ```
+
+GitHub: https://github.com/q99266/frida-magic162
 
 ## 一、下载构建产物
 
