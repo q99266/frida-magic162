@@ -1,0 +1,105 @@
+name: Build Frida 16.2.1 Anti-Detection
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-android-arm64:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout magic overlay
+        uses: actions/checkout@v4
+
+      - name: Clone Frida 16.2.1
+        run: |
+          git clone --branch 16.2.1 --depth 1 --recursive \
+            https://github.com/frida/frida.git frida-src
+          cp post_process.py frida-src/
+          cp -r tools frida-src/
+
+      - name: Apply magic source patches
+        working-directory: frida-src
+        run: python tools/apply-magic-patches.py
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Set Frida environment
+        working-directory: frida-src
+        run: |
+          echo "FRIDA=$GITHUB_WORKSPACE/frida-src" >> $GITHUB_ENV
+          echo "FRIDA_VERSION=$(releng/frida_version.py)" >> $GITHUB_ENV
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential ninja-build flex bison curl git
+          pip install meson==1.3.0 tomlkit lief
+
+      - name: Setup NDK r25b
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r25b
+          add-to-path: false
+
+      - name: Configure NDK
+        run: echo "ANDROID_NDK_ROOT=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+
+      - name: Download Frida SDK bundles
+        working-directory: frida-src
+        run: |
+          releng/deps.py roll toolchain linux-x86_64
+          releng/deps.py roll sdk linux-x86_64 --activate
+          releng/deps.py roll sdk android-arm --activate
+          releng/deps.py roll sdk android-arm64 --activate
+
+      - name: Build frida-server (android-arm64)
+        working-directory: frida-src
+        run: make -j"$(nproc)" build/frida-android-arm64/lib/pkgconfig/frida-core-1.0.pc
+
+      - name: Post-process server binary
+        working-directory: frida-src
+        run: |
+          chmod +x build/frida-android-arm64/bin/frida-server
+          python post_process.py \
+            build/frida-android-arm64/bin/frida-server \
+            build/frida-server-processed
+          chmod +x build/frida-server-processed
+          build/frida-server-processed --version || true
+
+      - name: Upload server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-server-android-arm64
+          path: frida-src/build/frida-server-processed
+
+  build-client-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout magic overlay
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install frida 16.2.1
+        run: |
+          pip install frida==16.2.1 frida-tools
+          frida --version
+
+      - name: Patch Python client (re.nginx / nginx:rpc)
+        run: python tools/patch-frida-client.py --output-dir tools/frida-patched
+
+      - name: Upload patched client
+        uses: actions/upload-artifact@v4
+        with:
+          name: frida-client-windows-amd64
+          path: tools/frida-patched/
