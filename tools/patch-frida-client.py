@@ -180,8 +180,17 @@ def main() -> None:
         print("Done. Re-open your shell if frida was already imported.")
         return
 
-    pyd_out = (out_dir / "_frida.pyd") if out_dir else None
-    core_out = (out_dir / "core.py") if out_dir else None
+    if args.dry_run:
+        pyd_out = None
+        core_out = None
+    elif out_dir:
+        staging = out_dir / ".patch-staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        pyd_out = staging / pyd_path.name
+        core_out = staging / "core.py"
+    else:
+        pyd_out = None
+        core_out = None
 
     if not args.dry_run and not out_dir:
         backup_file(pyd_path, backup_dir)
@@ -206,6 +215,9 @@ def main() -> None:
         typings = pyd_path.parent / "_frida"
         if typings.is_dir():
             shutil.copytree(typings, out_dir / "_frida", dirs_exist_ok=True)
+        staging = out_dir / ".patch-staging"
+        if staging.exists():
+            shutil.rmtree(staging)
         pkg_parent = out_dir.resolve()
         print()
         print("Patched shadow package written to:", pkg_parent)
