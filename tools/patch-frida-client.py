@@ -38,6 +38,20 @@ def find_frida_package() -> Path:
     return Path(spec.origin).resolve().parent
 
 
+def find_frida_extension(frida_dir: Path) -> Path:
+    """Frida 16.x: site-packages/_frida.pyd; Frida 17.x: site-packages/frida/_frida.pyd."""
+    names = ("_frida.pyd", "_frida.so", "_frida.dylib")
+    for base in (frida_dir.parent, frida_dir):
+        for name in names:
+            path = base / name
+            if path.is_file():
+                return path
+    raise SystemExit(
+        f"missing native extension under {frida_dir.parent} or {frida_dir} "
+        f"(tried {', '.join(names)})"
+    )
+
+
 def count_pyd_markers(data: bytes) -> dict[str, int]:
     return {
         "re.frida.": data.count(b"re.frida."),
@@ -147,14 +161,13 @@ def main() -> None:
     args = parser.parse_args()
 
     frida_dir = args.frida_dir or find_frida_package()
-    pyd_path = frida_dir / "_frida.pyd"
+    pyd_path = find_frida_extension(frida_dir)
     core_path = frida_dir / "core.py"
     backup_dir = frida_dir / ".frida-magic162-backup"
     out_dir = args.output_dir
 
     print(f"frida package: {frida_dir}")
-    if not pyd_path.is_file():
-        raise SystemExit(f"missing extension: {pyd_path}")
+    print(f"native extension: {pyd_path}")
     if not core_path.is_file():
         raise SystemExit(f"missing core.py: {core_path}")
 
@@ -182,17 +195,21 @@ def main() -> None:
     if args.dry_run:
         print("Dry run complete — no files modified.")
     elif out_dir:
-        shadow_root = out_dir if out_dir.name == "frida" else out_dir / "frida"
-        if shadow_root.exists():
-            shutil.rmtree(shadow_root)
-        shutil.copytree(frida_dir, shadow_root, ignore=shutil.ignore_patterns(
+        shadow_pkg = out_dir / "frida"
+        if shadow_pkg.exists():
+            shutil.rmtree(shadow_pkg)
+        shutil.copytree(frida_dir, shadow_pkg, ignore=shutil.ignore_patterns(
             ".frida-magic162-backup", "__pycache__", "*.pyc"
         ))
-        shutil.copy2(patched_pyd, shadow_root / "_frida.pyd")
-        shutil.copy2(patched_core, shadow_root / "core.py")
-        pkg_parent = shadow_root.parent.resolve()
+        shutil.copy2(patched_core, shadow_pkg / "core.py")
+        shutil.copy2(patched_pyd, out_dir / pyd_path.name)
+        typings = pyd_path.parent / "_frida"
+        if typings.is_dir():
+            shutil.copytree(typings, out_dir / "_frida", dirs_exist_ok=True)
+        pkg_parent = out_dir.resolve()
         print()
-        print("Patched shadow package written to:", shadow_root.resolve())
+        print("Patched shadow package written to:", pkg_parent)
+        print("Layout: frida/ + _frida.pyd (sibling, required for Frida 16.x)")
         print("Use without touching site-packages:")
         print(f'  set PYTHONPATH={pkg_parent}')
         print("  frida-ps -H <host>:<port>")

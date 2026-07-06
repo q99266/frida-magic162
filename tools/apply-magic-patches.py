@@ -17,7 +17,7 @@ FILES_RE_FRIDA = [
 
 APP_LISTEN_BLOCK = """
 \t\tif (listen_address == null) {
-\t\t\tlisten_address = Environment.get_variable ("APP_LISTEN");
+\t\t\tlisten_address = GLib.Environment.get_variable ("APP_LISTEN");
 \t\t}
 
 """

@@ -3,7 +3,7 @@ $ErrorActionPreference = "Stop"
 $ShadowRoot = Join-Path $PSScriptRoot "frida-patched"
 $ShadowPkg = Join-Path $ShadowRoot "frida"
 
-if (-not (Test-Path (Join-Path $ShadowPkg "_frida.pyd"))) {
+if (-not (Test-Path (Join-Path $ShadowRoot "_frida.pyd")) -and -not (Test-Path (Join-Path $ShadowRoot "_frida.so"))) {
     python (Join-Path $PSScriptRoot "patch-frida-client.py") --output-dir $ShadowRoot
 }
 
