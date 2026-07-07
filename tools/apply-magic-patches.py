@@ -34,11 +34,25 @@ ENTRYPOINT_FILES = [
 
 def patch_re_frida(path: Path) -> None:
     text = path.read_text(encoding="utf-8")
-    if "re.nginx." in text and "re.frida." not in text:
+    updated = text.replace("re.frida.", "re.nginx.").replace("/re/frida/", "/re/nginx/")
+    if updated == text:
         print(f"skip (already patched): {path}")
         return
-    path.write_text(text.replace("re.frida.", "re.nginx."), encoding="utf-8")
+    path.write_text(updated, encoding="utf-8")
     print(f"patched: {path}")
+
+
+def patch_agent_sources() -> None:
+    """Patch agent/payload sources so embedded agents match re.nginx at build time."""
+    agent_globs = [
+        CORE / "lib/base/session.vala",
+        CORE / "lib/agent/agent.vala",
+        CORE / "lib/payload/portal-client.vala",
+        CORE / "lib/payload/fork-monitor.vala",
+    ]
+    for path in agent_globs:
+        if path.is_file():
+            patch_re_frida(path)
 
 
 def patch_server() -> None:
@@ -75,6 +89,7 @@ def main() -> None:
     for f in FILES_RE_FRIDA:
         if f.is_file():
             patch_re_frida(f)
+    patch_agent_sources()
     for f in ENTRYPOINT_FILES:
         if f.is_file():
             patch_agent_entrypoint(f)

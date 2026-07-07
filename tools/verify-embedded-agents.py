@@ -53,6 +53,15 @@ def verify_server(path: Path) -> int:
         print(f"FAIL: not a valid ELF server binary: {path}")
         return 1
 
+    raw = path.read_bytes()
+    if b"app-agent\x00\x00" in raw:
+        print("FAIL: corrupted agent PathTemplate (app-agent\\0\\0) still present")
+        return 1
+    if b"nginx-agent-<arch>.so" not in raw and b"frida-agent-<arch>.so" not in raw:
+        print("FAIL: agent PathTemplate (nginx-agent-<arch>.so) not found")
+        return 1
+    print("OK: agent PathTemplate strings look valid")
+
     text = next((s for s in binary.sections if s.name == ".text"), None)
     if text is None:
         print("FAIL: .text section missing")
@@ -95,6 +104,15 @@ def verify_server(path: Path) -> int:
             errors += 1
         else:
             print(f"OK: {label} entrypoint={AGENT_ENTRYPOINT}")
+
+        if b"/re/nginx/AgentSessionProvider" not in blob:
+            print(f"FAIL: {label} missing /re/nginx/AgentSessionProvider")
+            errors += 1
+        elif b"/re/frida/AgentSessionProvider" in blob:
+            print(f"FAIL: {label} still has /re/frida/AgentSessionProvider")
+            errors += 1
+        else:
+            print(f"OK: {label} D-Bus path=/re/nginx/")
 
         if bitness == "64":
             has_native_64 = True

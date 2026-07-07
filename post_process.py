@@ -98,7 +98,9 @@ TARGETED_REPLACEMENTS = [
     (b"frida-context",             b"app-context"),
     (b"frida-server",              b"app-server"),
     (b"frida-helper",              b"app-helper"),
-    (b"frida-agent",               b"app-agent"),
+    # MUST stay equal-length: shorter "app-agent" null-pads and breaks PathTemplate
+    # "frida-agent-<arch>.so" -> "app-agent\0\0-<arch>.so" (all agents get same name → 32-bit inject).
+    (b"frida-agent",               b"nginx-agent"),
     (b"frida-gadget",              b"app-gadget"),
     (b"frida-inject",              b"app-inject"),
     (b"frida-portal",              b"app-portal"),
@@ -113,6 +115,10 @@ TARGETED_REPLACEMENTS = [
     # Do NOT replace /frida/ -> /app/ — it corrupts JNI path re/frida/HelperBackend.
 ]
 
+# Repair PathTemplate / memfd names corrupted by legacy shorter frida-agent -> app-agent scrub.
+AGENT_PATH_CORRUPTION_REPAIRS = [
+    (b"app-agent\x00\x00", b"nginx-agent"),
+]
 
 def random_name(length: int) -> str:
     """Generate a random alphanumeric string of the given length."""
@@ -361,6 +367,27 @@ def repair_jni_helper_strings(binary, dry_run: bool) -> int:
             section.content = list(mutable)
         repairs += section_repairs
 
+    return repairs
+
+
+def repair_agent_path_templates(binary, dry_run: bool) -> int:
+    """Fix null-padded agent PathTemplate strings after legacy shorter frida-agent scrub."""
+    repairs = 0
+    for section in binary.sections:
+        if section.name != ".rodata":
+            continue
+        content = bytes(section.content)
+        mutable = bytearray(content)
+        section_repairs = _apply_equal_length_replacements(
+            mutable,
+            AGENT_PATH_CORRUPTION_REPAIRS,
+            dry_run,
+            ".rodata",
+            "agent path",
+        )
+        if not dry_run and section_repairs and mutable != bytearray(content):
+            section.content = list(mutable)
+        repairs += section_repairs
     return repairs
 
 
@@ -719,6 +746,28 @@ def _fix_elf_dynamic_consistency(blob: bytearray, target_filesz: int | None = No
             break
 
 
+def _patch_agent_dbus_namespace(blob: bytearray) -> int:
+    """Align embedded agent with scrubbed server/client (re.nginx, nginx:rpc)."""
+    replacements = [
+        (b"/re/frida/", b"/re/nginx/"),
+        (b"re.frida.", b"re.nginx."),
+        (b"frida:rpc", b"nginx:rpc"),
+    ]
+    patched = 0
+    for old, new in replacements:
+        if len(old) != len(new):
+            continue
+        idx = 0
+        while idx <= len(blob) - len(old):
+            if blob[idx : idx + len(old)] == old:
+                blob[idx : idx + len(new)] = new
+                patched += 1
+                idx += len(old)
+            else:
+                idx += 1
+    return patched
+
+
 def _revert_scrubs_in_agent_blob(blob: bytearray) -> int:
     revert_rules = [
         (b"app-core\x00\x00", b"frida-core"),
@@ -846,6 +895,14 @@ def repair_embedded_agent_main(binary, dry_run: bool) -> int:
                     start,
                 )
                 continue
+
+            dbus_patches = _patch_agent_dbus_namespace(agent_blob)
+            if dbus_patches:
+                log.info(
+                    "Patched %d D-Bus namespace strings in agent at .text offset 0x%x",
+                    dbus_patches,
+                    start,
+                )
 
             content[start:end] = agent_blob
             repairs += 1
@@ -1250,6 +1307,11 @@ def process_binary(
     log.info("--- Step 2: Targeted string replacement ---")
     scrubbed = targeted_scrub(binary, dry_run)
     log.info("Targeted replacements: %d", scrubbed)
+
+    # --- Step 2a: Repair corrupted agent PathTemplate strings ---
+    log.info("--- Step 2a: Repair agent PathTemplate strings ---")
+    agent_path_repairs = repair_agent_path_templates(binary, dry_run)
+    log.info("Agent PathTemplate repairs: %d", agent_path_repairs)
 
     # --- Step 2b: Repair zymbiote placeholders in embedded helper blobs ---
     log.info("--- Step 2b: Repair zymbiote placeholders ---")
