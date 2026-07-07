@@ -67,7 +67,8 @@ case "$LISTEN_MODE" in
         ;;
 esac
 
-USE_CMDLINE_LISTEN="${USE_CMDLINE_LISTEN:-1}"
+# Default off: keep "-l unix:..." out of /proc/PID/cmdline (server reads APP_LISTEN env).
+USE_CMDLINE_LISTEN="${USE_CMDLINE_LISTEN:-0}"
 
 {
     echo "mode=$LISTEN_MODE"
@@ -127,6 +128,10 @@ else
     echo "[*] adb forward tcp:$FORWARD_PORT tcp:$FORWARD_PORT"
 fi
 
+fake_kworker_name() {
+    printf "kworker/%s:%s" "$(rand_hex 2)" "$(rand_hex 1)"
+}
+
 (
     while kill -0 "$PID" 2>/dev/null; do
         for TID_DIR in /proc/$PID/task/*/; do
@@ -137,22 +142,14 @@ fi
             COMM_NAME=$(cat "$COMM_FILE" 2>/dev/null)
 
             if [ "$TID" = "$PID" ]; then
-                echo "$FAKE_NAME" > "$COMM_FILE" 2>/dev/null || true
+                printf '%s' "$FAKE_NAME" > "$COMM_FILE" 2>/dev/null || true
                 continue
             fi
 
-            RENAME=0
-            case "$COMM_NAME" in
-                gmain|gdbus|GDBus|main|pool-*|*Injector*|*injector*|*gum-js*|*pool-frida*|*pool-spawner*|*linjector*)
-                    RENAME=1
-                    ;;
-            esac
-
-            if [ "$RENAME" = "1" ]; then
-                echo "$(rand_hex 4)" > "$COMM_FILE" 2>/dev/null || true
-            fi
+            # Rename every worker thread: GLib resets gmain/gdbus faster than a filter-only loop.
+            printf '%s' "$(fake_kworker_name)" > "$COMM_FILE" 2>/dev/null || true
         done
-        sleep 1
+        sleep 0.05
     done
 ) &
 MONITOR_PID=$!

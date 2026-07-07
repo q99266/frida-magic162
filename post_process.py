@@ -78,6 +78,13 @@ DEBUG_PATH_REPLACEMENTS = [
     (b"/__w/frida/frida/", b"/__w/app/magic/\x00\x00"),
 ]
 
+# Equal-length scrub for assert/build path strings left in .text (outside agent/dex blobs).
+SOURCE_PATH_REPLACEMENTS = [
+    (b"frida-helper-service", b"nginx-helper-service"),
+    (b"frida-helper-backend", b"nginx-helper-backend"),
+    (b"remote frida-server", b"remote nginx-server"),
+]
+
 DEX_MAGIC = b"dex\n035"
 ELF_MAGIC = b"\x7fELF"
 ELFCLASS32 = 1
@@ -1188,6 +1195,27 @@ def replace_embedded_helper_dex(binary, helper_dex_path: Path, dry_run: bool) ->
     return False
 
 
+def scrub_source_debug_paths(binary, dry_run: bool) -> int:
+    """Scrub frida-* source path strings in .text (safe equal-length, any offset)."""
+    repairs = 0
+    for section in binary.sections:
+        if section.name != ".text":
+            continue
+        content = bytes(section.content)
+        mutable = bytearray(content)
+        section_repairs = _apply_equal_length_replacements(
+            mutable,
+            SOURCE_PATH_REPLACEMENTS,
+            dry_run,
+            ".text",
+            "source path",
+        )
+        if not dry_run and mutable != bytearray(content):
+            section.content = list(mutable)
+        repairs += section_repairs
+    return repairs
+
+
 def scrub_debug_paths(binary, dry_run: bool) -> int:
     """Replace Vala assert / CI path substrings that leak frida in binaries."""
     repairs = 0
@@ -1332,6 +1360,11 @@ def process_binary(
     log.info("--- Step 2e: Debug path scrub ---")
     debug_repairs = scrub_debug_paths(binary, dry_run)
     log.info("Debug path repairs: %d", debug_repairs)
+
+    # --- Step 2e2: Source assert path scrub (.text) ---
+    log.info("--- Step 2e2: Source assert path scrub ---")
+    source_path_repairs = scrub_source_debug_paths(binary, dry_run)
+    log.info("Source assert path repairs: %d", source_path_repairs)
 
     # --- Step 2g: Repair embedded agent entrypoint (app_agent_main -> main) ---
     log.info("--- Step 2g: Repair embedded agent entrypoint ---")

@@ -55,7 +55,7 @@ Invoke-Adb @(
     "shell",
     "su",
     "-c",
-    "chmod 700 $RemoteBin $RemoteLauncher; LISTEN_MODE=$ListenMode nohup sh $RemoteLauncher $RemoteBin $Port >/data/local/tmp/.launcher.log 2>&1 &"
+    "chmod 700 $RemoteBin $RemoteLauncher; USE_CMDLINE_LISTEN=0 LISTEN_MODE=$ListenMode nohup sh $RemoteLauncher $RemoteBin $Port >/data/local/tmp/.launcher.log 2>&1 &"
 )
 
 Start-Sleep -Seconds 3
